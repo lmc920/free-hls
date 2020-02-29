@@ -1,56 +1,32 @@
-import os, sys, glob, shutil, requests, subprocess
+import os, sys, requests
 from sys import argv
 from os import getenv as _
-from shellescape import quote
 from dotenv import load_dotenv
+from utils import exec, tsfiles, safename, uploader, sameparams
 from concurrent.futures import ThreadPoolExecutor, as_completed
 load_dotenv()
 argv += [''] * 3
 
 def publish(code, title=None):
-  r = requests.post('%s/publish' % _('APIURL'), data={
-    'code': code,
-    'title': title
-  }).json()
+  if _('NOSERVER') == 'YES':
+    return print('The m3u8 file has been dumped to tmp/out.m3u8')
 
-  if r['code'] == 0:
-    return '%s/play/%s' % (_('APIURL'), r['data'])
-  else:
-    return None
+  try:
+    r = requests.post('%s/publish' % _('APIURL'), data={'code': code, 'title': title}).json()
+    if r['err']:
+      print('Publish failed: %s' % r['message'])
 
-def upload_ali(file):
-
-  r = requests.post('https://kfupload.alibaba.com/mupload', data={
-      'name': 'image.png',
-      'scene': 'productImageRule'
-  }, files={
-      'file': ('image.png', open(file, 'rb'), 'image/png')
-  }).json()
-
-  if 'url' in r:
-    return r['url']
-  else:
-    return None
-
-def upload_yuque(file):
-
-  r = requests.post('https://www.yuque.com/api/upload/attach?ctoken=%s' % _('YUQUE_CTOKEN'), files={
-    'file': ('image.png', open(file, 'rb'), 'image/png')
-  }, headers={
-    'Referer': 'https://www.yuque.com/yuque/topics/new',
-    'Cookie': 'ctoken=%s; _yuque_session=%s' % (_('YUQUE_CTOKEN'), _('YUQUE_SESSION'))
-  }).json()
-
-  if 'data' in r and 'url' in r['data']:
-    return r['data']['url']
-  else:
-    return None
+    url = '%s/play/%s' % (_('APIURL'), r['data'])
+    print('This video has been published to: %s' % url)
+    print('You can also download it directly: %s.m3u8' % url)
+  except:
+    print('Publish failed: network connection error')
 
 def bit_rate(file):
-  return int(os.popen('ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 %s' % file).read().strip())
+  return int(exec(['ffprobe','-v','error','-show_entries','format=bit_rate','-of','default=noprint_wrappers=1:nokey=1',file]))
 
 def video_codec(file):
-  codecs = os.popen('ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 %s' % file).read().strip()
+  codecs = exec(['ffprobe','-v','error','-select_streams','v:0','-show_entries','stream=codec_name','-of','default=noprint_wrappers=1:nokey=1',file])
   return 'h264' if set(codecs.split('\n')).difference({'h264'}) else 'copy'
 
 def command_generator(file):
@@ -70,36 +46,54 @@ def command_generator(file):
   #SEGMENT_TIME
   if argv[3].isnumeric():
     sub += ' -segment_time %d' % float(argv[3])
+  else:
+    sub += ' -segment_time %d' % segment_time
 
-  # return ' -i %s -codec copy -map 0 -f segment -segment_list out.m3u8 -segment_list_flags +live -segment_time 5 out%%03d.ts' % file
-  # return ' -i %s -vcodec copy -acodec aac -hls_list_size 0 -hls_segment_size 3000000 -f hls out.m3u8' % file
-  return ' -i %s -vcodec %s -acodec aac -map 0 -f segment -segment_list out.m3u8 %s out%%05d.ts' % (file, vcodec, sub)
+  return 'ffmpeg -i %s -vcodec %s -acodec aac -bsf:v h264_mp4toannexb -map 0:v:0 -map 0:a? -f segment -segment_list out.m3u8 %s out%%05d.ts' % (safename(file), vcodec, sub)
 
 
 def main():
 
-  title   = argv[2] if len(argv)>2 else os.path.splitext(os.path.basename(argv[1]))[0]
+  title   = argv[2] if argv[2] else os.path.splitext(os.path.basename(argv[1]))[0]
   tmpdir  = os.path.dirname(os.path.abspath(__file__)) + '/tmp'
-  command = command_generator((os.path.abspath(argv[1])))
+  command = command_generator(os.path.abspath(argv[1]))
 
-  if os.path.isdir(tmpdir):
-    shutil.rmtree(tmpdir)
-  os.mkdir(tmpdir)
-  os.chdir(tmpdir)
-  print('ffmpeg %s' % command)
-  os.system('ffmpeg %s' % command)
+  if sameparams(tmpdir, command):
+    os.chdir(tmpdir)
+  else:
+    os.mkdir(tmpdir)
+    os.chdir(tmpdir)
+    os.system(command)
+    open('command.sh', 'w').write(command)
 
-  i, lines = 0, open('out.m3u8', 'r').read()
+  failures, completions = 0, 0
+  lines    = open('out.m3u8', 'r').read()
   executor = ThreadPoolExecutor(max_workers=10)
-  futures  = {executor.submit(upload_yuque, chunk): chunk for chunk in glob.glob('*.ts')}
+  futures  = {executor.submit(uploader(), chunk): chunk for chunk in tsfiles(lines)}
 
   for future in as_completed(futures):
-    lines = lines.replace(futures[future], future.result())
+    completions += 1
+    result = future.result()
 
-    i += 1
-    print('[%s/%s] Uploaded %s to %s' % (i, len(futures), futures[future], future.result()))
+    if not result:
+      failures += 1
+      print('[%s/%s] Uploaded failed: %s' % (completions, len(futures), futures[future]))
+      continue
 
-  print('This video has been published to: %s' % publish(lines, title))
+    lines = lines.replace(futures[future], result)
+    print('[%s/%s] Uploaded %s to %s' % (completions, len(futures), futures[future], result))
+
+  print('\n')
+
+  #Write to file
+  open('out.m3u8', 'w').write(lines)
+
+  if not failures:
+    publish(lines, title)
+  else:
+    print('Partially successful: %d/%d' % (completions, completions-failures))
+    print('You can re-execute this program with the same parameters')
+
 
 
 if __name__ == '__main__':

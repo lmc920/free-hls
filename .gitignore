@@ -1,3 +1,5 @@
 tmp/
 .env
+.idea
+userdata/
 **/__pycache__

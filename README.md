@@ -18,7 +18,7 @@
 
 ```bash
 apt install -y ffmpeg python3 python3-pip
-pip3 install shellescape python-dotenv
+pip3 install requests python-dotenv
 ```
 
 
@@ -44,9 +44,10 @@ pip3 install shellescape python-dotenv
 准备好目标视频文件，输入如下指令开始切片、上传：
 
 ```bash
-python3 up.py test.mp4         #默认标题
-python3 up.py test.mp4 测试哦   #自定义标题
-python3 up.py test.mp4 test 5  #自定义分段大小
+python3 up.py test.mp4               #默认标题
+python3 up.py test.mp4 测试哦         #自定义标题
+python3 up.py test.mp4 test 5        #自定义分段大小
+python3 up.py test.mp4 test LIMITED  #限制码率（需重编码）
 ```
 
 
@@ -70,6 +71,12 @@ pip3 install Flask gunicorn
 
 ```bash
 cd web
-gunicorn app:app -b 0.0.0.0:3395 -D
+gunicorn app:app -b 0.0.0.0:3395 --workers=5 --threads=2 -D
 ```
 
+
+## 相似服务
+
+- [https://github.com/sxzz/free-hls.js](https://github.com/sxzz/free-hls.js)
+- [https://github.com/sxzz/free-hls-live](https://github.com/sxzz/free-hls-live)
+- [https://github.com/MoeClub/Note/tree/master/ffmpeg](https://github.com/MoeClub/Note/tree/master/ffmpeg)
